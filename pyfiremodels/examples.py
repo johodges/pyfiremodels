@@ -1,4 +1,6 @@
 import numpy as np
+from fireplumes import calculateSprinklerActivationTime, calculateSprinklerActivationTimeSpecifiedProfile, calculateCeilingJetTemperature
+
 
 def getJHcolors():
     colors = np.array([[0, 65, 101],
@@ -20,8 +22,8 @@ def getJHcolors():
     colors = colors/255
     return colors
 
+'''
 def calculateCeilingJetTemperature(r, Q, H, Ti=293):
-    # Q is the total HRR
     # SFPE Handbook chapter 14
     if r > 0.18*H:
         # SFPE Handbook chapter 14 - Eq 14.3
@@ -87,11 +89,9 @@ def calculateSprinklerActivationTime(r, H, Ti, RTI, alpha, Qmax, Tactivation):
         Td = calculateSprinklerTemperature(r, H, t, Ti, RTI, alpha, Qmax)
         if (t > 3600):
             return -1
-    Q = alpha*t**2
-    return t, Q
+    return t
 
 def calculateSprinklerActivationTimeSpecifiedProfile(r, H, Ti, RTI, t1, Q1, Tactivation, dt=0.1):
-    # SFPE Handbook Chapter 40 Eq. 40.15
     ts = np.linspace(0, np.max(t1), int(np.max(t1)/dt + 1))
     Ts = np.zeros_like(ts) + Ti
     Qs = np.interp(ts, t1, Q1)
@@ -301,146 +301,64 @@ def calculateVirtualSource(Q,D):
     #z0 = (-1.02+0.083*(Q**(2/5))/D)*D
     z0 = -1.02*D+0.083*(Q**(2/5))
     return z0
+'''
 
+def nfpa204_activation(r, H, Ti, RTI, t1, Q1, Tactivation, xc, dt=0.01):
+    ts = np.linspace(0, np.max(t1), int(np.max(t1)/dt + 1))
+    Ts = np.zeros_like(ts) + Ti
+    Qs = np.interp(ts, t1, Q1)
+    us = np.zeros_like(ts)
+    Tgs = np.zeros_like(ts)
+    for i in range(1, len(ts)):
+        Q = Qs[i-1]
+        u = calculate_nfpa204_velocity(xc, Q, H)
+        Tg = calculateCeilingJetTemperature(r, Q, H, Ti)
+        dTdt = (u**0.5)*(Tg-Ts[i-1]) / RTI
+        Ts[i] = Ts[i-1] + dTdt*dt
+        us[i] = u
+        Tgs[i] = Tg
+    
+    inds = np.where(Ts > Tactivation)[0]
+    if len(inds) > 0:
+        tActivation = ts[inds[0]]
+    else:
+        tActivation = np.nan
+    return ts, Ts, tActivation, us, Tgs
+
+def calculate_nfpa204_velocity(xc, Q, H, g=9.81):
+    Qc = Q*xc
+    Qstar_H = xc*Qc/1150/(H**2.5)
+    u_nfpa204 = g**0.5 * H**0.5 * Qstar_H**(1/3)
+    return u_nfpa204
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     colors = getJHcolors()
     
-    
-    Q = 1000#1.5*7000 #13400*3 #35000
-    
-    Qs = [1000]
-    plt.figure(figsize=(12,8))
-    for i, Q in enumerate(Qs):
-        Tamb = 20 + 273.15
-        zs = np.linspace(0, 10, 101)
-        T = calculateT(Q, zs, Tamb, g=9.81)
-        
-        failureTemp = 538
-        T = T-273.15
-        
-        fs=16
-        lw=3
-        
-        ind = np.where(T > failureTemp)[0][-1]+1
-        exposureTemp = failureTemp
-        fireZs = zs #/0.3048 #+4
-        
-        ind = np.argmin(np.abs(fireZs - 60))
-        exposureTemp = T[ind]
-        plt.plot(T, fireZs, '-', linewidth=lw, label=' %0.1f MW'%(Q/1000), color=colors[i])
-        #plt.ylim([0, 15])
-        #plt.plot([100, 880], [70, 70], '--', linewidth=lw, label='Ceiling', color=colors[1])
-        #plt.plot([100, 880], [60, 60], '--', linewidth=lw, label='Bottom of Truss', color=colors[2])
-        #plt.plot([100, 880], [6.5, 6.5], '--', linewidth=lw, label='Top of Fuel Package', color=colors[3])
-        #plt.plot([100, 880], [16, 16], '--', linewidth=lw, label='Level 2 floor', color=colors[4])
-        #plt.scatter([exposureTemp], [60], marker='x', s=500, label='$\mathrm{T=%0.0f^{o}C}$'%(exposureTemp), color='r')
-    
-    plt.plot([260, 260], [0,10], '--k', linewidth=lw, label='Failure')
-    
-    plt.grid()
-    plt.xlabel("Gas Temperature (C)", fontsize=fs)
-    plt.ylabel("Height Above Fire (m))", fontsize=fs)
-    plt.legend(fontsize=fs, bbox_to_anchor=(0.9, 0.8))
-    plt.tick_params(labelsize=fs)
-    #plt.title("HRR = %0.1f MW"%(Q/1000), fontsize=fs)
-    plt.tight_layout()
-    
-    
-    #d = 4.267
-    d = 2.4384
-    h = (d**2 + d**2)**0.5
-    r = h/2
-    H = 16.764
+    H = 3
+    spacing = 4
     RTI = 50
-    alpha = 0.1876
-    Qmax = 10000
-    Tactivation = 73.9
+    Tactivation = 68
     Ti = 20
+    alpha = 0.04689
     xc = 0.7
-    #calculateSprinklerActivationTime(r, H, Ti, RTI, alpha, Qmax, Tactivation)
+    Qmax = 1e6
+    
+    r = (2**0.5)/2*spacing
+    t1 = np.linspace(0,1200,12001)
+    
+    t, Q = calculateSprinklerActivationTime(r, H, Ti, RTI, alpha, Qmax, Tactivation)
+    print(t, Q)
     
     #r = d/2
-    t1 = np.linspace(0,1200,12001)
+    
     Q1 = xc*(alpha*t1**2)
     ts, Ts, tActivation, us, Tgs = calculateSprinklerActivationTimeSpecifiedProfile(r, H, Ti, RTI, t1, Q1, Tactivation, dt=0.01)
-    
+    plt.plot(ts, us); 
     print(tActivation, alpha*tActivation**2)
     
-    
-    plt.figure()
-    z = np.linspace(0, 2, 101)
-    Q = 50
-    u = calculateV(Q, z, 300, g=9.81)
-    T = calculateT(Q, z, 300, g=9.81)-273.15
-    plt.plot(T, z)
-    
-    '''
-    times = np.linspace(0, 600, 601)
-    hrrs = np.zeros_like(times)
-    
-    for i in range(0, times.shape[0]):
-        if i <= 300:
-            hrrs[i] = times[i]*1500/300
-        else:
-            hrrs[i] = hrrs[i-1]-1500/100
-    
-    hrrs[hrrs < 0] = 0
-    
-    r = 15/2*0.3048
-    H = (32-19)*0.3048
-    Ti = 20 + 273.15
-    RTI = 50
-    Tactivation = 73.9 + 273.15
-    
-    
-    
-    
-    plt.figure(figsize=(10,8))
-    fs=16
-    lw = 3
-    
-    ts, Ts, tActivation, us, Tgs = calculateSprinklerActivationTimeSpecifiedProfile(r, (32-19)*0.3048, Ti, RTI, times, hrrs, Tactivation, dt=0.1)
-    plt.plot(ts/60, Ts-273.15, label='19 ft', color=colors[0], linewidth=lw)
-
-    ts, Ts, tActivation, us, Tgs = calculateSprinklerActivationTimeSpecifiedProfile(r, (32-6)*0.3048, Ti, RTI, times, hrrs, Tactivation, dt=0.1)
-    plt.plot(ts/60, Ts-273.15, label='6 ft', color=colors[1], linewidth=lw)
-    
-    ts, Ts, tActivation, us, Tgs = calculateSprinklerActivationTimeSpecifiedProfile(r, 32*0.3048, Ti, RTI, times, hrrs, Tactivation, dt=0.1)
-    plt.plot(ts/60, Ts-273.15, label='0 ft', color=colors[2], linewidth=lw)
-    
-    plt.plot(times/60, np.zeros_like(times) + Tactivation-273.15, '--', label='Activation', color=colors[3], linewidth=lw)
-    
-    plt.grid()
-    plt.tick_params(labelsize=fs)
-    plt.xlabel('Time (min)', fontsize=fs)
-    plt.ylabel('Sprinkler Temperature ($\mathrm{^{\circ}C}$)', fontsize=fs)
-    plt.legend(fontsize=fs, title='Fire Base Height', title_fontsize=fs)
-    plt.tight_layout()
-    '''
-    
-    '''
-    r = 15*0.3048
-    H = 13*0.3048
-    RTI = 50
-    Tactivation = 74 + 273.15
-    alpha = getGrowthRates('fast', peak=None, time=None, p=2)
-    t1 = np.linspace(0, 1200, 1201)
-    Q1 = alpha*np.power(t1, 2)
-    
-    ts, Ts, tActivation, us, Tgs = calculateSprinklerActivationTimeSpecifiedProfile(r, H, Tamb, RTI, t1, Q1, Tactivation, dt=1)
-    
-    Q1[ts > tActivation] = np.max(Q1[ts <= tActivation])
-    
-    Ts2 = np.zeros_like(Q1)
-    
-    for i in range(0, Ts2.shape[0]):
-        Ts2[i] = calculateT(Q1, H, Tamb, g=9.81)[0]
-    
-    plt.figure()
-    plt.plot(ts, Ts2)
-    '''
-    
+    ts, Ts, tActivation, us, Tgs = nfpa204_activation(r, H, Ti, RTI, t1, Q1, Tactivation, xc, dt=0.01)
+    plt.plot(ts, us); 
+    print(tActivation, alpha*tActivation**2)
     
     
